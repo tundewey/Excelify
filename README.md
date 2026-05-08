@@ -1,51 +1,61 @@
-# Excelify
+# Excelify (AI-MCP-LMS)
 
-AI-powered learning stack: **FastAPI** backend with **RAG** (Sentence Transformers + **FAISS**), an **agent loop** that routes to tools via **OpenRouter**, and room to grow toward **MCP-style** tool calling.
+Excelify is a learning-focused AI backend that combines:
+- retrieval-augmented generation (RAG) with FAISS + sentence-transformers,
+- an OpenRouter-powered tool-selection agent loop,
+- and a lightweight local MCP-style tool server used for calculator/utility calls.
 
-**Repository:** [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
+Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 
-## Features
+## What this project does
 
-- **Document upload** — Text files are chunked, embedded with `all-MiniLM-L6-v2` (384-dim), and added to a shared **FAISS** index.
-- **RAG** — `rag_search` retrieves top-k chunks and answers with an LLM through [OpenRouter](https://openrouter.ai/) (OpenAI-compatible SDK).
-- **Agent loop** — Up to multiple steps: the router chooses a tool, runs it, and can iterate (observe → decide → act).
-- **Tool registry** — Central `TOOLS` map: `rag_search`, `summarize`, `quiz_tool` (extend with new entries as you learn).
-- **Debuggable routing** — The router returns structured JSON validated by Pydantic: **`tool`** + **`reasoning`** (why that tool). Step logs and chat **history** include reasoning for troubleshooting.
+- Upload text documents and index them into an in-memory vector store.
+- Answer questions from uploaded context using OpenRouter.
+- Route user requests through an agent that selects a tool (`rag_search`, `summarize`, `quiz_tool`, `calculator_tool`).
+- Call local MCP-style tools (for example, calculator) from the backend.
 
-## How it flows
+## Architecture at a glance
 
-1. **Upload** (`POST /api/v1/upload`) → chunk → embed → `vector_store.add(...)`.
-2. **Chat** (`POST /api/v1/chat`) → `run_agent` → **`choose_tool`** (LLM picks tool + reasoning) → run `TOOLS[tool]` → append to **history** until stop condition or max steps.
+1. `POST /api/v1/upload` receives a text file.
+2. File content is chunked and embedded with `all-MiniLM-L6-v2`.
+3. Embeddings are stored in a shared FAISS-backed in-memory store.
+4. `POST /api/v1/chat` runs an agent loop (`MAX_STEPS = 3`):
+   - choose tool with OpenRouter (`tool` + `reasoning` JSON),
+   - execute selected tool,
+   - return step-by-step `history` and `final_response`.
+5. `calculator_tool` calls the local MCP server at `http://127.0.0.1:9000`.
 
-The vector store is **in-memory** and **shared** across routes in one process (`app/db/store.py`). Restarting the server clears embeddings unless you add persistence.
+Note: the vector store is in memory. Restarting the backend clears uploaded embeddings.
 
-## Repository layout
+## Project structure
 
-```
+```text
 ai-mcp-lms/
 ├── README.md
-└── backend/
-    ├── app/
-    │   ├── api/v1/           # chat, upload
-    │   ├── db/               # VectorStore + shared instance
-    │   ├── models/           # schemas (e.g. ToolDecision)
-    │   ├── services/         # RAG, embeddings, agent, tools, tool_selector
-    │   └── utils/             # text chunker
-    ├── requirements.txt
-    ├── pyrightconfig.json
-    ├── .env.example
-    └── .env                   # local only — not committed
+├── backend/
+│   ├── app/
+│   │   ├── api/v1/            # chat and upload routes
+│   │   ├── db/                # vector store + shared instance
+│   │   ├── models/            # Pydantic schemas
+│   │   ├── services/          # agent, router, tools, MCP client, RAG
+│   │   └── utils/             # chunking helpers
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── .env                   # local only, not committed
+├── mcp_server/
+│   └── main.py                # local MCP-style tool server
+└── frontend/                  # placeholder for UI work
 ```
-
-Add a **`frontend/`** folder when you connect a UI; this layout fits a typical monorepo.
 
 ## Prerequisites
 
-- **Python 3.10+**
-- **[OpenRouter](https://openrouter.ai/)** API key (chat + router calls)
-- First run downloads the embedding model (Hugging Face cache); on Windows you may see symlink cache warnings unless Developer Mode is on.
+- Python 3.10+
+- An [OpenRouter](https://openrouter.ai/) API key
+- Windows PowerShell (commands below use PowerShell syntax)
 
-## Backend setup
+## 1) Backend setup and run
+
+From project root:
 
 ```powershell
 cd backend
@@ -53,64 +63,73 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
-# Set OPENROUTER_API_KEY in .env
 ```
 
-## Run the API
+Set `OPENROUTER_API_KEY` inside `backend/.env`, then start backend:
 
 ```powershell
-cd backend
-.\venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload
 ```
 
-- **Root:** http://127.0.0.1:8000  
-- **Swagger:** http://127.0.0.1:8000/docs  
+Backend URLs:
+- API root: <http://127.0.0.1:8000>
+- Swagger docs: <http://127.0.0.1:8000/docs>
 
-`app/main.py` loads `.env` from `backend/` before importing routes so keys are available on startup.
+## 2) MCP server setup and run
+
+Open a second terminal:
+
+```powershell
+cd mcp_server
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install fastapi uvicorn pydantic
+uvicorn main:app --port 9000 --reload
+```
+
+MCP server endpoints:
+- `GET /tools` -> lists available tools
+- `POST /execute` -> executes a tool with arguments
 
 ## Environment variables
 
+In `backend/.env`:
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter secret key |
-| `OPENROUTER_SITE_URL` | No | Optional header for OpenRouter |
-| `OPENROUTER_APP_NAME` | No | Optional header (e.g. `Excelify`) |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter API key used by router and RAG services |
+| `OPENROUTER_SITE_URL` | No | Optional OpenRouter attribution header value |
+| `OPENROUTER_APP_NAME` | No | Optional app name header value |
 
-## API (v1)
+## API endpoints (backend)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Smoke message |
-| `GET` | `/api/v1/chat` | Ping |
-| `POST` | `/api/v1/chat` | `{"question": "..."}` → agent result: `history` (steps with `tool`, `reasoning`, `result`), `final_response`; or `{ "error": "..." }` |
-| `POST` | `/api/v1/upload` | Multipart file → chunk, embed, index |
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/` | Health message |
+| `GET` | `/api/v1/chat` | Chat endpoint ping |
+| `POST` | `/api/v1/chat` | Runs agent loop for `{"question": "..."}` |
+| `POST` | `/api/v1/upload` | Upload and index a text file |
 
-**Suggested flow:** Upload a `.txt` (or decoded text) document, then ask a question so `rag_search` has vectors to query.
+## Quick test flow
 
-## OpenRouter tips
-
-- Use a **modest `max_tokens`** on long completions so free-tier credits are not exhausted by default large caps (`rag_service`).
-- Prefer **`openai/gpt-4o-mini`** where possible for routing and experimentation.
-- The tool router expects **pure JSON** with `tool` and `reasoning`; tightening the prompt reduces parse errors.
+1. Start backend (`:8000`) and MCP server (`:9000`).
+2. Upload a `.txt` file in Swagger (`/docs`) via `POST /api/v1/upload`.
+3. Ask a question with `POST /api/v1/chat`.
+4. Try a math prompt (for example: "Add 7 and 5") to trigger `calculator_tool`.
 
 ## Tech stack
 
-- **FastAPI**, **Uvicorn**, **Pydantic**
-- **sentence-transformers** (embedding), **faiss-cpu**, **NumPy**
-- **openai** SDK → `base_url=https://openrouter.ai/api/v1`
-- **python-dotenv**, **python-multipart**
+- FastAPI, Uvicorn, Pydantic
+- sentence-transformers (`all-MiniLM-L6-v2`), NumPy, faiss-cpu
+- OpenAI Python SDK with OpenRouter `base_url`
+- python-dotenv, python-multipart, requests
 
-## Roadmap ideas
+## Known limitations
 
-- Tool payloads: `arguments: { ... }` per tool (closer to full tool calling / **MCP**).
-- Persist FAISS + metadata to disk or a hosted vector DB.
-- Frontend for upload + chat UX.
+- No persistent vector DB yet (in-memory only).
+- MCP server is a local development service.
+- `frontend/` is currently a placeholder.
 
 ## Contributing
 
-Issues and pull requests are welcome on **[tundewey/Excelify](https://github.com/tundewey/Excelify)**.
-
-## License
-
-Provided as-is for learning. Add a `LICENSE` file when you settle on terms.
+Pull requests and issues are welcome: [tundewey/Excelify](https://github.com/tundewey/Excelify)

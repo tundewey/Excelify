@@ -13,6 +13,7 @@ AVAILABLE_TOOLS = [
     "rag_search",
     "summarize",
     "quiz_tool",
+    "calculator_tool"
 ]
 
 
@@ -41,6 +42,7 @@ def choose_tool(user_input: str) -> ToolDecision:
     - Use rag_search for knowledge/document questions
     - Use summarize for summaries
     - Use quiz_tool for quizzes
+    - Use calculator_tool for math/addition questions
 
     User Input:
     {user_input}
