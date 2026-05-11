@@ -13,21 +13,20 @@ Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 - Answer questions from uploaded context using OpenRouter.
 - Route user requests through an agent that selects a tool from the backend registry (see **Tools** below).
 - Call local MCP-style tools (`calculator`, `echo`, `uppercase`, `run_python`) from the backend over HTTP.
+- Keep **per-session chat memory** in process (user turns and assistant tool results) so follow-up questions can see prior context.
 
 ## Architecture at a glance
 
 1. `POST /api/v1/upload` receives a text file.
 2. File content is chunked and embedded with `all-MiniLM-L6-v2`.
 3. Embeddings are stored in a shared FAISS-backed in-memory store.
-4. `POST /api/v1/chat` runs an agent loop (`MAX_STEPS = 3`):
-   - choose tool with OpenRouter (`tool` + `reasoning` JSON),
-   - execute selected tool,
-   - return step-by-step `history` and `final_response`.
-5. MCP-backed tools call the local server at `http://127.0.0.1:9000` (`mcp_client`).
+4. `POST /api/v1/chat` accepts a **`session_id`** and **`question`**. The agent loads **`memory_store`** for that session, appends the user message, and passes conversation history plus the current question into the router and tools. After each agent step it can append an assistant memory entry (last step result).
+5. The agent loop runs up to **`MAX_STEPS = 3`**: choose tool with OpenRouter (`tool` + `reasoning` JSON), run the tool, return `history` and `final_response`.
+6. MCP-backed tools call the local server at `http://127.0.0.1:9000` (`mcp_client`).
 
 The tool router builds its prompt from **`TOOLS` keys** merged with **`GET /tools`** descriptions from the MCP server when it is reachable (fallback text is used if the MCP server is down).
 
-Note: the vector store is in memory. Restarting the backend clears uploaded embeddings.
+Note: the vector store and **`memory_store`** are in memory. Restarting the backend clears uploaded embeddings and all session transcripts.
 
 ## Tools
 
@@ -57,7 +56,7 @@ ai-mcp-lms/
 │   │   ├── api/v1/            # chat and upload routes
 │   │   ├── db/                # vector store + shared instance
 │   │   ├── models/            # Pydantic schemas
-│   │   ├── services/          # agent, router, tools, MCP client, RAG
+│   │   ├── services/          # agent, memory_store, router, tools, MCP client, RAG
 │   │   └── utils/             # chunking helpers
 │   ├── requirements.txt
 │   ├── .env.example
@@ -127,14 +126,14 @@ In `backend/.env`:
 |--------|------|---------|
 | `GET` | `/` | Health message |
 | `GET` | `/api/v1/chat` | Chat endpoint ping |
-| `POST` | `/api/v1/chat` | Runs agent loop for `{"question": "..."}` |
+| `POST` | `/api/v1/chat` | Runs agent loop: `{"session_id": "any-stable-id", "question": "..."}` |
 | `POST` | `/api/v1/upload` | Upload and index a text file |
 
 ## Quick test flow
 
 1. Start backend (`:8000`) and MCP server (`:9000`).
 2. Upload a `.txt` file in Swagger (`/docs`) via `POST /api/v1/upload`.
-3. Ask a question with `POST /api/v1/chat`.
+3. Ask a question with `POST /api/v1/chat` using a fixed `session_id` (for example `demo-1`) so memory accrues across turns.
 4. Try a math prompt (for example: "Add 7 and 5") to trigger `calculator` or `calculator_tool`.
 5. Optional: try echo / uppercase, or a guarded `run_python_tool` prompt only in a safe local setup.
 
@@ -148,6 +147,7 @@ In `backend/.env`:
 ## Known limitations
 
 - No persistent vector DB yet (in-memory only).
+- Session memory is a single-process dict (`memory_store`); it does not scale across workers or survive restarts.
 - MCP server is a local development service; `run_python` is inherently unsafe if exposed.
 - `frontend/` is currently a placeholder.
 

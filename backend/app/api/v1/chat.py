@@ -1,12 +1,9 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+
+from app.models.schemas import ChatRequest
 from app.services.agent_service import run_agent
 
 router = APIRouter()
-
-
-class ChatRequest(BaseModel):
-    question: str
 
 
 @router.get("/chat")
@@ -18,5 +15,5 @@ def chat():
 def chat(req: ChatRequest):
     # answer = answer_question(req.question)
     # return {"answer": answer}
-    result = run_agent(req.question)
+    result = run_agent(req.session_id, req.question)
     return result
