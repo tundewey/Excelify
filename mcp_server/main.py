@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+import contextlib
+import io
+
+
 app = FastAPI(title="MCP Server")
 
 TOOLS = {
@@ -12,7 +16,10 @@ TOOLS = {
     },
     "uppercase": {
         "description": "Converts text to uppercase"
-    }
+    },
+    "run_python": {
+        "description": "Executes Python code"
+    },
 }
 
 @app.get("/tools")
@@ -49,6 +56,45 @@ def execute_tool(req: ToolRequest):
         return {
             "result": str(text).upper()
         }
+
+    # elif req.tool == "run_python":
+
+    #     code = req.arguments.get("code", "")
+
+    #     try:
+    #         local_scope = {}
+
+    #         exec(code, {}, local_scope)
+
+    #         return {
+    #             "result": local_scope
+    #         }
+
+    #     except Exception as e:
+    #         return {
+    #             "error": str(e)
+    #         }
+
+    elif req.tool == "run_python":
+
+        code = req.arguments.get("code", "")
+
+        stdout_buf = io.StringIO()
+        try:
+            globals_dict = {"__builtins__": __builtins__}
+            local_scope: dict = {}
+
+            with contextlib.redirect_stdout(stdout_buf):
+                exec(code, globals_dict, local_scope)
+
+            return {
+                "result": stdout_buf.getvalue(),
+            }
+
+        except Exception as e:
+            return {
+                "error": str(e),
+            }
 
     return {
         "error": "Unknown tool"

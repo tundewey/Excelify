@@ -11,8 +11,8 @@ Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 
 - Upload text documents and index them into an in-memory vector store.
 - Answer questions from uploaded context using OpenRouter.
-- Route user requests through an agent that selects a tool (`rag_search`, `summarize`, `quiz_tool`, `calculator_tool`).
-- Call local MCP-style tools (for example, calculator) from the backend.
+- Route user requests through an agent that selects a tool from the backend registry (see **Tools** below).
+- Call local MCP-style tools (`calculator`, `echo`, `uppercase`, `run_python`) from the backend over HTTP.
 
 ## Architecture at a glance
 
@@ -23,9 +23,29 @@ Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
    - choose tool with OpenRouter (`tool` + `reasoning` JSON),
    - execute selected tool,
    - return step-by-step `history` and `final_response`.
-5. `calculator_tool` calls the local MCP server at `http://127.0.0.1:9000`.
+5. MCP-backed tools call the local server at `http://127.0.0.1:9000` (`mcp_client`).
+
+The tool router builds its prompt from **`TOOLS` keys** merged with **`GET /tools`** descriptions from the MCP server when it is reachable (fallback text is used if the MCP server is down).
 
 Note: the vector store is in memory. Restarting the backend clears uploaded embeddings.
+
+## Tools
+
+Backend registry (`backend/app/services/tools.py`):
+
+| Tool name | Role |
+|-----------|------|
+| `rag_search` | RAG answers from uploaded chunks (FAISS + OpenRouter). |
+| `summarize` | Short inline summary of the user text. |
+| `quiz_tool` | Quiz-style response. |
+| `calculator` / `calculator_tool` | Same MCP calculator (two names; `calculator_tool` kept as an alias). |
+| `echo` | MCP echo. |
+| `uppercase` | MCP uppercase. |
+| `run_python_tool` | Runs Python via MCP `run_python` (stdout captured). |
+
+MCP server (`mcp_server/main.py`): `calculator`, `echo`, `uppercase`, `run_python` exposed on `GET /tools` and `POST /execute`.
+
+**Security:** `run_python` executes arbitrary code with full `__builtins__`. Use only on trusted networks and never expose the MCP port publicly without hardening.
 
 ## Project structure
 
@@ -88,8 +108,8 @@ uvicorn main:app --port 9000 --reload
 ```
 
 MCP server endpoints:
-- `GET /tools` -> lists available tools
-- `POST /execute` -> executes a tool with arguments
+- `GET /tools` — tool catalog (names and descriptions for the router)
+- `POST /execute` — body `{"tool": "<name>", "arguments": { ... } }` (for example `run_python` with `{"code": "print(1+1)"}`)
 
 ## Environment variables
 
@@ -115,7 +135,8 @@ In `backend/.env`:
 1. Start backend (`:8000`) and MCP server (`:9000`).
 2. Upload a `.txt` file in Swagger (`/docs`) via `POST /api/v1/upload`.
 3. Ask a question with `POST /api/v1/chat`.
-4. Try a math prompt (for example: "Add 7 and 5") to trigger `calculator_tool`.
+4. Try a math prompt (for example: "Add 7 and 5") to trigger `calculator` or `calculator_tool`.
+5. Optional: try echo / uppercase, or a guarded `run_python_tool` prompt only in a safe local setup.
 
 ## Tech stack
 
@@ -127,7 +148,7 @@ In `backend/.env`:
 ## Known limitations
 
 - No persistent vector DB yet (in-memory only).
-- MCP server is a local development service.
+- MCP server is a local development service; `run_python` is inherently unsafe if exposed.
 - `frontend/` is currently a placeholder.
 
 ## Contributing
