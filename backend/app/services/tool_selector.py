@@ -124,7 +124,9 @@ def choose_tool(user_input: str) -> ToolDecision:
     response = client.chat.completions.create(
         model="openai/gpt-4o",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=256,
+        # max_tokens=256,
+        # max_tokens=127,
+        max_tokens=106,
     )
     content = response.choices[0].message.content.strip()
     data = json.loads(content)

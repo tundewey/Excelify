@@ -1,30 +1,32 @@
 # Excelify (AI-MCP-LMS)
 
-Excelify is a learning-focused AI backend that combines:
-- retrieval-augmented generation (RAG) with FAISS + sentence-transformers,
-- an OpenRouter-powered tool-selection agent loop,
-- and a lightweight local MCP-style tool server used for calculator/utility calls.
+Excelify is a learning-focused **full stack** app:
+
+- **Next.js** frontend (chat UI, document upload, agent step timeline) on `http://localhost:3000`
+- **FastAPI** backend with RAG (**FAISS** + **sentence-transformers**), an **OpenRouter** tool router, and **per-session memory**
+- Optional **MCP-style** tool server (`mcp_server`) on `http://127.0.0.1:9000` for calculator, echo, uppercase, and `run_python`
 
 Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 
 ## What this project does
 
-- Upload text documents and index them into an in-memory vector store.
-- Answer questions from uploaded context using OpenRouter.
-- Route user requests through an agent that selects a tool from the backend registry (see **Tools** below).
-- Call local MCP-style tools (`calculator`, `echo`, `uppercase`, `run_python`) from the backend over HTTP.
-- Keep **per-session chat memory** in process (user turns and assistant tool results) so follow-up questions can see prior context.
+- Upload text documents and index them into an in-memory vector store (API or UI).
+- Answer questions from uploaded context using OpenRouter (`rag_search`).
+- Route requests through an agent that picks a tool from the backend registry (see **Tools** below).
+- Call MCP-backed tools over HTTP when the MCP server is running.
+- Persist **session-scoped** user and assistant entries in `memory_store` (in-process). The **router** uses the current turn text (clipped for token limits); tools receive the same `current_input` flow as before multi-step continuation.
 
 ## Architecture at a glance
 
 1. `POST /api/v1/upload` receives a text file.
 2. File content is chunked and embedded with `all-MiniLM-L6-v2`.
 3. Embeddings are stored in a shared FAISS-backed in-memory store.
-4. `POST /api/v1/chat` accepts a **`session_id`** and **`question`**. The agent loads **`memory_store`** for that session, appends the user message, and passes conversation history plus the current question into the router and tools. After each agent step it can append an assistant memory entry (last step result).
-5. The agent loop runs up to **`MAX_STEPS = 3`**: choose tool with OpenRouter (`tool` + `reasoning` JSON), run the tool, return `history` and `final_response`.
-6. MCP-backed tools call the local server at `http://127.0.0.1:9000` (`mcp_client`).
+4. `POST /api/v1/chat` accepts **`session_id`** and **`question`**. The agent records the user message, runs up to **`MAX_STEPS = 3`**: clip routing input (see `ROUTER_INPUT_MAX_CHARS` in `agent_service.py`), **`choose_tool`** returns JSON (`tool`, `reasoning`), then the selected tool runs. Assistant lines are appended to memory during multi-step runs and once with the final reply.
+5. MCP-backed tools call `http://127.0.0.1:9000` via `mcp_client`.
 
 The tool router builds its prompt from **`TOOLS` keys** merged with **`GET /tools`** descriptions from the MCP server when it is reachable (fallback text is used if the MCP server is down).
+
+The backend enables **CORS** for `http://localhost:3000` and `http://127.0.0.1:3000` so the Next.js app can call the API.
 
 Note: the vector store and **`memory_store`** are in memory. Restarting the backend clears uploaded embeddings and all session transcripts.
 
@@ -63,12 +65,16 @@ ai-mcp-lms/
 │   └── .env                   # local only, not committed
 ├── mcp_server/
 │   └── main.py                # local MCP-style tool server
-└── frontend/                  # placeholder for UI work
+└── frontend/                  # Next.js (App Router) + Tailwind
+    ├── app/                   # UI: `page.tsx` (API base `http://localhost:8000`)
+    ├── package.json
+    └── ...
 ```
 
 ## Prerequisites
 
 - Python 3.10+
+- **Node.js 20+** (recommended for Next.js 16)
 - An [OpenRouter](https://openrouter.ai/) API key
 - Windows PowerShell (commands below use PowerShell syntax)
 
@@ -94,7 +100,7 @@ Backend URLs:
 - API root: <http://127.0.0.1:8000>
 - Swagger docs: <http://127.0.0.1:8000/docs>
 
-## 2) MCP server setup and run
+## 2) MCP server setup and run (optional)
 
 Open a second terminal:
 
@@ -109,6 +115,22 @@ uvicorn main:app --port 9000 --reload
 MCP server endpoints:
 - `GET /tools` — tool catalog (names and descriptions for the router)
 - `POST /execute` — body `{"tool": "<name>", "arguments": { ... } }` (for example `run_python` with `{"code": "print(1+1)"}`)
+
+Without the MCP server, tools that call it will return a friendly “unavailable” style message from the backend.
+
+## 3) Frontend setup and run
+
+From project root:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:3000>. The UI posts to **`http://localhost:8000`** (see `frontend/app/page.tsx`). Keep the backend running on port **8000**.
+
+The demo UI uses a fixed **`session_id`** (`student_1` in code today). Change that in `page.tsx` if you need multiple isolated browser tabs or users.
 
 ## Environment variables
 
@@ -131,15 +153,23 @@ In `backend/.env`:
 
 ## Quick test flow
 
-1. Start backend (`:8000`) and MCP server (`:9000`).
-2. Upload a `.txt` file in Swagger (`/docs`) via `POST /api/v1/upload`.
-3. Ask a question with `POST /api/v1/chat` using a fixed `session_id` (for example `demo-1`) so memory accrues across turns.
-4. Try a math prompt (for example: "Add 7 and 5") to trigger `calculator` or `calculator_tool`.
-5. Optional: try echo / uppercase, or a guarded `run_python_tool` prompt only in a safe local setup.
+**Option A — UI**
+
+1. Start backend (`:8000`), optional MCP (`:9000`), then `npm run dev` in `frontend/` (`:3000`).
+2. Upload a `.txt` file in the app, then chat and inspect agent steps in the thread.
+
+**Option B — Swagger**
+
+1. Start backend and optional MCP.
+2. Upload via `POST /api/v1/upload`.
+3. Chat via `POST /api/v1/chat` with `{"session_id": "demo-1", "question": "..."}`.
+
+Then try a math prompt (for example: “Add 7 and 5”) for `calculator` / `calculator_tool`, or echo / uppercase / `run_python_tool` only in a **trusted local** setup.
 
 ## Tech stack
 
-- FastAPI, Uvicorn, Pydantic
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, TypeScript
+- **Backend:** FastAPI, Uvicorn, Pydantic
 - sentence-transformers (`all-MiniLM-L6-v2`), NumPy, faiss-cpu
 - OpenAI Python SDK with OpenRouter `base_url`
 - python-dotenv, python-multipart, requests
@@ -149,7 +179,7 @@ In `backend/.env`:
 - No persistent vector DB yet (in-memory only).
 - Session memory is a single-process dict (`memory_store`); it does not scale across workers or survive restarts.
 - MCP server is a local development service; `run_python` is inherently unsafe if exposed.
-- `frontend/` is currently a placeholder.
+- The bundled UI uses a demo `session_id`; production apps should generate or authenticate sessions.
 
 ## Contributing
 

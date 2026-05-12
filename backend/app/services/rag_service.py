@@ -44,7 +44,8 @@ def answer_question(question: str):
     response = client.chat.completions.create(
         model="openai/gpt-4o",  # use any model id shown on OpenRouter, e.g. anthropic/claude-3.5-haiku
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=512,
+        # max_tokens=512,
+        max_tokens=47,
         # extra_headers={  # alternative to default_headers on the client
         #     "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:8000"),
         #     "X-Title": os.getenv("OPENROUTER_APP_NAME", "AI-MCP-LMS"),
