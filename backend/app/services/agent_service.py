@@ -15,7 +15,7 @@ def _clip(text: str, max_chars: int) -> str:
     return text[:max_chars]
 
 
-def run_agent(session_id: str, user_input: str):
+def run_agent(session_id: str, lesson_id: int, user_input: str):
 
     save_memory(session_id, "user", user_input)
 
@@ -51,7 +51,12 @@ def run_agent(session_id: str, user_input: str):
         # ACT — first turn: user question; later turns: prior-result continuation block
         tool = TOOLS[tool_name]
 
-        result = tool(current_input)
+        # result = tool(current_input)
+
+        if tool_name == "rag_search":
+            result = tool(lesson_id, current_input)
+        else:
+            result = tool(current_input)
 
         result_text = result if isinstance(result, str) else ("" if result is None else str(result))
         

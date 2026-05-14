@@ -2,51 +2,48 @@
 
 Excelify is a learning-focused **full stack** app:
 
-- **Next.js** frontend (chat UI, document upload, agent step timeline) on `http://localhost:3000`
-- **FastAPI** backend with RAG (**FAISS** + **sentence-transformers**), an **OpenRouter** tool router, and **per-session memory**
+- **Next.js** frontend: course catalog (`/`), course detail (`/courses/[courseId]`), per-lesson chat and material upload (`/lessons/[lessonId]`)
+- **FastAPI** backend: in-memory **courses & lessons**, **lesson-scoped** FAISS indexes for RAG, an **OpenRouter** agent router, optional **quiz generation** from lesson materials, and **per-session chat memory**
 - Optional **MCP-style** tool server (`mcp_server`) on `http://127.0.0.1:9000` for calculator, echo, uppercase, and `run_python`
 
 Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 
 ## What this project does
 
-- Upload text documents and index them into an in-memory vector store (API or UI).
-- Answer questions from uploaded context using OpenRouter (`rag_search`).
-- Route requests through an agent that picks a tool from the backend registry (see **Tools** below).
-- Call MCP-backed tools over HTTP when the MCP server is running.
-- Persist **session-scoped** user and assistant entries in `memory_store` (in-process). The **router** uses the current turn text (clipped for token limits); tools receive the same `current_input` flow as before multi-step continuation.
+- **LMS (demo):** create courses and lessons via API; the UI lists courses and drills into lessons.
+- **Lesson materials:** upload a `.txt` file for a given **`lesson_id`**; chunks are embedded and stored in **`lesson_vector_stores[lesson_id]`** (separate FAISS index per lesson).
+- **Chat:** `POST /api/v1/chat` with `session_id`, **`lesson_id`**, and `question`. The agent routes tools; **`rag_search`** answers from vectors for that lesson only.
+- **Quiz:** `GET /api/v1/quiz/{lesson_id}` retrieves chunks from the lesson index and asks OpenRouter for three multiple-choice questions (JSON).
+- **MCP tools:** calculator, echo, uppercase, Python runner (when `mcp_server` is running).
+- **Memory:** `memory_store` keeps per-session transcript lines (in-process); the router still uses a **clipped** current input for token limits (`ROUTER_INPUT_MAX_CHARS` in `agent_service.py`).
 
 ## Architecture at a glance
 
-1. `POST /api/v1/upload` receives a text file.
-2. File content is chunked and embedded with `all-MiniLM-L6-v2`.
-3. Embeddings are stored in a shared FAISS-backed in-memory store.
-4. `POST /api/v1/chat` accepts **`session_id`** and **`question`**. The agent records the user message, runs up to **`MAX_STEPS = 3`**: clip routing input (see `ROUTER_INPUT_MAX_CHARS` in `agent_service.py`), **`choose_tool`** returns JSON (`tool`, `reasoning`), then the selected tool runs. Assistant lines are appended to memory during multi-step runs and once with the final reply.
-5. MCP-backed tools call `http://127.0.0.1:9000` via `mcp_client`.
+1. **Courses / lessons** live in `app/db/lms_store.py` (`courses` dict). APIs under `/api/v1/courses` and `/api/v1/courses/{id}/lessons`.
+2. **Upload:** `POST /api/v1/upload/{lesson_id}` → chunk → embed → `lesson_vector_stores[lesson_id]`.
+3. **RAG:** `answer_question(lesson_id, question)` searches that lesson’s store only.
+4. **Chat:** `run_agent(session_id, lesson_id, question)` → `choose_tool` → tools; `rag_search` receives `lesson_id`.
+5. **Quiz:** sample chunks from the lesson store (query embedding for `"Generate quiz"`) → `generate_quiz(context)` → parsed JSON `questions`.
+6. **MCP:** HTTP client to `http://127.0.0.1:9000` for non-RAG tools.
 
-The tool router builds its prompt from **`TOOLS` keys** merged with **`GET /tools`** descriptions from the MCP server when it is reachable (fallback text is used if the MCP server is down).
+The backend enables **CORS** for `http://localhost:3000` and `http://127.0.0.1:3000`.
 
-The backend enables **CORS** for `http://localhost:3000` and `http://127.0.0.1:3000` so the Next.js app can call the API.
-
-Note: the vector store and **`memory_store`** are in memory. Restarting the backend clears uploaded embeddings and all session transcripts.
+**Persistence:** `courses`, `lesson_vector_stores`, and `memory_store` are all **in memory**. Restarting the backend clears them.
 
 ## Tools
 
-Backend registry (`backend/app/services/tools.py`):
+Registry: `backend/app/services/tools.py`
 
 | Tool name | Role |
 |-----------|------|
-| `rag_search` | RAG answers from uploaded chunks (FAISS + OpenRouter). |
-| `summarize` | Short inline summary of the user text. |
-| `quiz_tool` | Quiz-style response. |
-| `calculator` / `calculator_tool` | Same MCP calculator (two names; `calculator_tool` kept as an alias). |
-| `echo` | MCP echo. |
-| `uppercase` | MCP uppercase. |
-| `run_python_tool` | Runs Python via MCP `run_python` (stdout captured). |
+| `rag_search` | RAG for **`lesson_id`** (lesson-scoped FAISS + OpenRouter). |
+| `summarize` | Short summary of the user text. |
+| `quiz_tool` | Simple canned quiz line (separate from HTTP quiz API). |
+| `calculator` / `calculator_tool` | MCP addition. |
+| `echo` / `uppercase` | MCP utilities. |
+| `run_python_tool` | MCP `run_python` (stdout). |
 
-MCP server (`mcp_server/main.py`): `calculator`, `echo`, `uppercase`, `run_python` exposed on `GET /tools` and `POST /execute`.
-
-**Security:** `run_python` executes arbitrary code with full `__builtins__`. Use only on trusted networks and never expose the MCP port publicly without hardening.
+**Security:** `run_python` is arbitrary code with full `__builtins__`. Do not expose the MCP port publicly.
 
 ## Project structure
 
@@ -55,32 +52,31 @@ ai-mcp-lms/
 ├── README.md
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/            # chat and upload routes
-│   │   ├── db/                # vector store + shared instance
-│   │   ├── models/            # Pydantic schemas
-│   │   ├── services/          # agent, memory_store, router, tools, MCP client, RAG
-│   │   └── utils/             # chunking helpers
+│   │   ├── api/v1/            # chat, upload, courses, lessons, quiz
+│   │   ├── db/                # vector_store, store, lms_store, vector_registry
+│   │   ├── models/            # schemas, lms_models, quiz_models
+│   │   ├── services/          # agent, memory, tools, RAG, quiz, MCP client, …
+│   │   └── utils/
 │   ├── requirements.txt
-│   ├── .env.example
-│   └── .env                   # local only, not committed
+│   └── .env.example
 ├── mcp_server/
-│   └── main.py                # local MCP-style tool server
-└── frontend/                  # Next.js (App Router) + Tailwind
-    ├── app/                   # UI: `page.tsx` (API base `http://localhost:8000`)
-    ├── package.json
-    └── ...
+│   └── main.py
+└── frontend/
+    ├── app/
+    │   ├── page.tsx                    # course list
+    │   ├── courses/[courseId]/         # course + lessons
+    │   └── lessons/[lessonId]/         # upload + chat (lesson_id scoped)
+    └── package.json
 ```
 
 ## Prerequisites
 
 - Python 3.10+
-- **Node.js 20+** (recommended for Next.js 16)
-- An [OpenRouter](https://openrouter.ai/) API key
-- Windows PowerShell (commands below use PowerShell syntax)
+- Node.js 20+ (recommended for Next.js 16)
+- [OpenRouter](https://openrouter.ai/) API key
+- Windows PowerShell (examples below)
 
-## 1) Backend setup and run
-
-From project root:
+## 1) Backend
 
 ```powershell
 cd backend
@@ -90,19 +86,16 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Set `OPENROUTER_API_KEY` inside `backend/.env`, then start backend:
+Set `OPENROUTER_API_KEY` in `backend/.env`, then:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-Backend URLs:
-- API root: <http://127.0.0.1:8000>
-- Swagger docs: <http://127.0.0.1:8000/docs>
+- API: <http://127.0.0.1:8000>
+- Docs: <http://127.0.0.1:8000/docs>
 
-## 2) MCP server setup and run (optional)
-
-Open a second terminal:
+## 2) MCP server (optional)
 
 ```powershell
 cd mcp_server
@@ -112,15 +105,7 @@ pip install fastapi uvicorn pydantic
 uvicorn main:app --port 9000 --reload
 ```
 
-MCP server endpoints:
-- `GET /tools` — tool catalog (names and descriptions for the router)
-- `POST /execute` — body `{"tool": "<name>", "arguments": { ... } }` (for example `run_python` with `{"code": "print(1+1)"}`)
-
-Without the MCP server, tools that call it will return a friendly “unavailable” style message from the backend.
-
-## 3) Frontend setup and run
-
-From project root:
+## 3) Frontend
 
 ```powershell
 cd frontend
@@ -128,59 +113,52 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. The UI posts to **`http://localhost:8000`** (see `frontend/app/page.tsx`). Keep the backend running on port **8000**.
-
-The demo UI uses a fixed **`session_id`** (`student_1` in code today). Change that in `page.tsx` if you need multiple isolated browser tabs or users.
+Open <http://localhost:3000>. Pages call **`http://127.0.0.1:8000`** (see `frontend/app/page.tsx` and lesson page). Run the API on **port 8000** or update `API_BASE` in the lesson page.
 
 ## Environment variables
 
-In `backend/.env`:
-
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | OpenRouter API key used by router and RAG services |
-| `OPENROUTER_SITE_URL` | No | Optional OpenRouter attribution header value |
-| `OPENROUTER_APP_NAME` | No | Optional app name header value |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter key (chat, RAG, router, quiz) |
+| `OPENROUTER_SITE_URL` | No | Optional attribution |
+| `OPENROUTER_APP_NAME` | No | Optional app title |
 
-## API endpoints (backend)
+## API reference (v1)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/` | Health message |
-| `GET` | `/api/v1/chat` | Chat endpoint ping |
-| `POST` | `/api/v1/chat` | Runs agent loop: `{"session_id": "any-stable-id", "question": "..."}` |
-| `POST` | `/api/v1/upload` | Upload and index a text file |
+| `GET` | `/` | Health |
+| `GET` | `/api/v1/chat` | Chat ping |
+| `POST` | `/api/v1/chat` | Agent: `{"session_id": "...", "lesson_id": 1, "question": "..."}` |
+| `POST` | `/api/v1/upload/{lesson_id}` | Multipart file → index under that lesson |
+| `POST` | `/api/v1/courses` | Create course (body: `Course`) |
+| `GET` | `/api/v1/courses` | List courses |
+| `GET` | `/api/v1/courses/{course_id}` | Get one course |
+| `POST` | `/api/v1/courses/{course_id}/lessons` | Add lesson to course |
+| `GET` | `/api/v1/courses/{course_id}/lessons` | List lessons |
+| `GET` | `/api/v1/quiz/{lesson_id}` | MCQ JSON from lesson vectors (requires prior upload) |
 
-## Quick test flow
+Create sample data via Swagger or `curl`, then open a lesson URL in the UI that matches a **lesson `id`** you created.
 
-**Option A — UI**
+## Quick test
 
-1. Start backend (`:8000`), optional MCP (`:9000`), then `npm run dev` in `frontend/` (`:3000`).
-2. Upload a `.txt` file in the app, then chat and inspect agent steps in the thread.
-
-**Option B — Swagger**
-
-1. Start backend and optional MCP.
-2. Upload via `POST /api/v1/upload`.
-3. Chat via `POST /api/v1/chat` with `{"session_id": "demo-1", "question": "..."}`.
-
-Then try a math prompt (for example: “Add 7 and 5”) for `calculator` / `calculator_tool`, or echo / uppercase / `run_python_tool` only in a **trusted local** setup.
+1. Start backend (and optional MCP).
+2. `POST /api/v1/courses` with a course that includes at least one lesson (`id`, `title`, `content`).
+3. Open the app home → course → lesson, or go directly to `/lessons/{lessonId}`.
+4. Upload a `.txt` lesson material file, then chat; optional: `GET /api/v1/quiz/{lesson_id}` in Swagger.
 
 ## Tech stack
 
-- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, TypeScript
-- **Backend:** FastAPI, Uvicorn, Pydantic
-- sentence-transformers (`all-MiniLM-L6-v2`), NumPy, faiss-cpu
-- OpenAI Python SDK with OpenRouter `base_url`
-- python-dotenv, python-multipart, requests
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, TypeScript  
+- **Backend:** FastAPI, Uvicorn, Pydantic, sentence-transformers, faiss-cpu, OpenAI SDK → OpenRouter, requests, python-dotenv, python-multipart  
 
 ## Known limitations
 
-- No persistent vector DB yet (in-memory only).
-- Session memory is a single-process dict (`memory_store`); it does not scale across workers or survive restarts.
-- MCP server is a local development service; `run_python` is inherently unsafe if exposed.
-- The bundled UI uses a demo `session_id`; production apps should generate or authenticate sessions.
+- No database: courses, vectors, and chat memory vanish on restart.
+- Lesson IDs must stay consistent between LMS data, uploads, chat, and quiz (no server-side join validation beyond 404s).
+- Demo `session_id` in the lesson UI; use real session handling in production.
+- `run_python` / MCP must stay on trusted networks only.
 
 ## Contributing
 
-Pull requests and issues are welcome: [tundewey/Excelify](https://github.com/tundewey/Excelify)
+Issues and PRs: [tundewey/Excelify](https://github.com/tundewey/Excelify)

@@ -7,3 +7,4 @@ class ToolDecision(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     question: str
+    lesson_id: int

@@ -2,6 +2,7 @@ import os
 from openai import OpenAI
 
 from app.services.embedding_service import embed_texts
+from app.db.vector_registry import lesson_vector_stores
 
 # from app.db.vector_store import VectorStore
 from app.db.store import vector_store
@@ -25,7 +26,12 @@ client = OpenAI(
 # vector_store = VectorStore(dim=384)
 
 
-def answer_question(question: str):
+def answer_question(lesson_id: int, question: str):
+    if lesson_id not in lesson_vector_stores:
+        return "No materials found for this lesson."
+
+    vector_store = lesson_vector_stores[lesson_id]
+
     query_embedding = embed_texts([question])[0]
     relevant_chunks = vector_store.search(query_embedding, k=3)
 

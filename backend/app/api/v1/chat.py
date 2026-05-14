@@ -15,5 +15,5 @@ def chat():
 def chat(req: ChatRequest):
     # answer = answer_question(req.question)
     # return {"answer": answer}
-    result = run_agent(req.session_id, req.question)
+    result = run_agent(req.session_id, req.lesson_id, req.question)
     return result
