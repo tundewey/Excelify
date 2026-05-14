@@ -4,15 +4,28 @@ from app.services.rag_service import answer_question
 from app.services.mcp_client import execute_mcp_tool
 
 def summarize_tool(text: str) -> str:
-    return f"Summary: {text[:150]}"
+    """One-shot summary so the agent loop can stop (must contain 'Final Answer')."""
+    body = (text or "").strip().replace("\n", " ")
+    if len(body) > 600:
+        body = body[:600].rsplit(" ", 1)[0] + " …"
+    return f"Final Answer: Summary — {body}"
 
 
-def quiz_tool(text: str):
-    return "Final Answer: Quiz - What is the main topic discussed?"
+def quiz_tool(text: str) -> str:
+    """Short quiz anchored on the user's topic (must contain 'Final Answer')."""
+    topic = (text or "").strip().replace("\n", " ")[:160]
+    if not topic:
+        topic = "the lesson"
+    return (
+        "Final Answer: [Quiz] "
+        f"(1) What is one key idea from: «{topic}»? "
+        "(2) Name one term or example from the material."
+    )
+
 
 def calculator_tool(text: str):
 
-    numbers = [int(s) for s in text.split() if s.isdigit()]
+    numbers = [int(m) for m in re.findall(r"-?\d+", text or "")]
 
     if len(numbers) < 2:
         return "Final Answer: Need two numbers"

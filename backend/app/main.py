@@ -11,6 +11,7 @@ from app.api.v1 import upload
 from app.api.v1 import courses
 from app.api.v1 import lessons
 from app.api.v1 import quiz
+from app.api.v1 import topics
 
 
 app = FastAPI(title="AI-MCP-LMS")
@@ -31,6 +32,7 @@ app.include_router(upload.router, prefix="/api/v1")
 app.include_router(courses.router, prefix="/api/v1")
 app.include_router(lessons.router, prefix="/api/v1")
 app.include_router(quiz.router, prefix="/api/v1")
+app.include_router(topics.router, prefix="/api/v1")
 
 
 @app.get("/")

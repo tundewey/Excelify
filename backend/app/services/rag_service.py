@@ -4,9 +4,6 @@ from openai import OpenAI
 from app.services.embedding_service import embed_texts
 from app.db.vector_registry import lesson_vector_stores
 
-# from app.db.vector_store import VectorStore
-from app.db.store import vector_store
-
 client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1",
@@ -28,7 +25,10 @@ client = OpenAI(
 
 def answer_question(lesson_id: int, question: str):
     if lesson_id not in lesson_vector_stores:
-        return "No materials found for this lesson."
+        return (
+            "Final Answer: No lesson materials uploaded yet for this lesson. "
+            "Upload a .txt file on the lesson page, then ask again."
+        )
 
     vector_store = lesson_vector_stores[lesson_id]
 
@@ -50,12 +50,14 @@ def answer_question(lesson_id: int, question: str):
     response = client.chat.completions.create(
         model="openai/gpt-4o",  # use any model id shown on OpenRouter, e.g. anthropic/claude-3.5-haiku
         messages=[{"role": "user", "content": prompt}],
-        # max_tokens=512,
-        max_tokens=47,
-        # extra_headers={  # alternative to default_headers on the client
-        #     "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:8000"),
-        #     "X-Title": os.getenv("OPENROUTER_APP_NAME", "AI-MCP-LMS"),
-        # },
+        max_tokens=512,
     )
 
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+    text = (content or "").strip()
+    if not text:
+        return "Final Answer: (No text returned from the model.)"
+    # Prefix so the agent loop stops after RAG even if the model omits the phrase.
+    if "final answer" not in text.lower():
+        return f"Final Answer: {text}"
+    return text

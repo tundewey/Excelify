@@ -109,14 +109,18 @@ def choose_tool(user_input: str) -> ToolDecision:
       "reasoning": "The user is asking about information that should come from uploaded documents."
     }}
 
-    Semantic hints:
-    - rag_search: knowledge / documents
-    - summarize: summaries
-    - quiz_tool: quizzes
-    - calculator or calculator_tool: math with numbers in the text
-    - echo: repeat user text via MCP
-    - uppercase: uppercase user text via MCP
-    - Use run_python_tool when user wants to execute Python code
+    Routing rules (follow strictly — this powers an LMS tutor):
+    - rag_search: DEFAULT for teaching questions — explain, what is, how does, define, describe,
+      "according to", "lesson material", "document", "uploaded", "this lesson", "variables",
+      "functions", concepts, or any factual question that should use course materials.
+    - quiz_tool: ONLY when the user clearly asks for a quiz, test, exam, practice questions,
+      MCQ, or "quiz me".
+    - summarize: ONLY when the user explicitly asks to summarize, recap, TL;DR, or "in bullet points"
+      (not for general "what is it about?" — use rag_search for that).
+    - calculator / calculator_tool: arithmetic, add/multiply numbers, "what is N + M".
+    - echo / uppercase: only when the user asks to echo or uppercase text.
+    - run_python_tool: only when the user wants to run or execute Python code.
+
     User Input:
 
     {user_input}
@@ -124,9 +128,7 @@ def choose_tool(user_input: str) -> ToolDecision:
     response = client.chat.completions.create(
         model="openai/gpt-4o",
         messages=[{"role": "user", "content": prompt}],
-        # max_tokens=256,
-        # max_tokens=127,
-        max_tokens=106,
+        max_tokens=256,
     )
     content = response.choices[0].message.content.strip()
     data = json.loads(content)

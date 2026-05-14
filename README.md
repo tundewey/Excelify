@@ -2,18 +2,19 @@
 
 Excelify is a learning-focused **full stack** app:
 
-- **Next.js** frontend: course catalog (`/`), course detail (`/courses/[courseId]`), per-lesson chat and material upload (`/lessons/[lessonId]`)
-- **FastAPI** backend: in-memory **courses & lessons**, **lesson-scoped** FAISS indexes for RAG, an **OpenRouter** agent router, optional **quiz generation** from lesson materials, and **per-session chat memory**
+- **Next.js** frontend: shared layout (**ExcelifAI** / `AppShell`), course catalog with **create course** on `/`, course detail with **add lesson** on `/courses/[courseId]`, and per-lesson **material upload**, **AI topic studio**, and chat on `/lessons/[lessonId]`
+- **FastAPI** backend: in-memory **courses & lessons** (optional auto IDs via `CourseCreate` / `LessonCreate`), **lesson-scoped** FAISS for RAG, **topic generation** from lesson text + uploaded chunks, an **OpenRouter** agent router, optional **quiz** from vectors, and **per-session chat memory**
 - Optional **MCP-style** tool server (`mcp_server`) on `http://127.0.0.1:9000` for calculator, echo, uppercase, and `run_python`
 
 Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 
 ## What this project does
 
-- **LMS (demo):** create courses and lessons via API; the UI lists courses and drills into lessons.
+- **LMS (demo):** create courses and lessons from the **UI** or API. Omit `id` on create bodies to auto-assign the next integer (courses: max course id + 1; lessons: max lesson id across all courses + 1).
 - **Lesson materials:** upload a `.txt` file for a given **`lesson_id`**; chunks are embedded and stored in **`lesson_vector_stores[lesson_id]`** (separate FAISS index per lesson).
 - **Chat:** `POST /api/v1/chat` with `session_id`, **`lesson_id`**, and `question`. The agent routes tools; **`rag_search`** answers from vectors for that lesson only.
-- **Quiz:** `GET /api/v1/quiz/{lesson_id}` retrieves chunks from the lesson index and asks OpenRouter for three multiple-choice questions (JSON).
+- **Topic studio:** `POST /api/v1/lessons/{lesson_id}/generate-topic` with `{ "prompt": "..." }` — OpenRouter returns structured JSON (`topic_title`, `summary`, `key_points`, `suggested_activities`) using lesson body plus top retrieved **uploaded** chunks when present.
+- **Quiz:** `GET /api/v1/quiz/{lesson_id}` samples chunks from the lesson index and asks OpenRouter for three multiple-choice questions (JSON).
 - **MCP tools:** calculator, echo, uppercase, Python runner (when `mcp_server` is running).
 - **Memory:** `memory_store` keeps per-session transcript lines (in-process); the router still uses a **clipped** current input for token limits (`ROUTER_INPUT_MAX_CHARS` in `agent_service.py`).
 
@@ -24,7 +25,8 @@ Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 3. **RAG:** `answer_question(lesson_id, question)` searches that lesson’s store only.
 4. **Chat:** `run_agent(session_id, lesson_id, question)` → `choose_tool` → tools; `rag_search` receives `lesson_id`.
 5. **Quiz:** sample chunks from the lesson store (query embedding for `"Generate quiz"`) → `generate_quiz(context)` → parsed JSON `questions`.
-6. **MCP:** HTTP client to `http://127.0.0.1:9000` for non-RAG tools.
+6. **Topics:** `topic_service.generate_topic` resolves the lesson across courses, builds context (course + lesson + optional RAG excerpts), calls OpenRouter, parses JSON (strips optional fenced code blocks if the model returns them).
+7. **MCP:** HTTP client to `http://127.0.0.1:9000` for non-RAG tools.
 
 The backend enables **CORS** for `http://localhost:3000` and `http://127.0.0.1:3000`.
 
@@ -37,8 +39,8 @@ Registry: `backend/app/services/tools.py`
 | Tool name | Role |
 |-----------|------|
 | `rag_search` | RAG for **`lesson_id`** (lesson-scoped FAISS + OpenRouter). |
-| `summarize` | Short summary of the user text. |
-| `quiz_tool` | Simple canned quiz line (separate from HTTP quiz API). |
+| `summarize` | Short summary; returns a line containing **`Final Answer`** so the agent loop can stop. |
+| `quiz_tool` | Short reflective quiz prompt anchored on the user text; **`Final Answer`** prefix (separate from `GET /quiz` API). |
 | `calculator` / `calculator_tool` | MCP addition. |
 | `echo` / `uppercase` | MCP utilities. |
 | `run_python_tool` | MCP `run_python` (stdout). |
@@ -52,20 +54,19 @@ ai-mcp-lms/
 ├── README.md
 ├── backend/
 │   ├── app/
-│   │   ├── api/v1/            # chat, upload, courses, lessons, quiz
+│   │   ├── api/v1/            # chat, upload, courses, lessons, quiz, topics
 │   │   ├── db/                # vector_store, store, lms_store, vector_registry
-│   │   ├── models/            # schemas, lms_models, quiz_models
-│   │   ├── services/          # agent, memory, tools, RAG, quiz, MCP client, …
+│   │   ├── models/            # schemas, lms_models, quiz_models, topic_models
+│   │   ├── services/          # agent, memory, tools, RAG, quiz, topic, MCP client, …
 │   │   └── utils/
 │   ├── requirements.txt
 │   └── .env.example
 ├── mcp_server/
 │   └── main.py
 └── frontend/
-    ├── app/
-    │   ├── page.tsx                    # course list
-    │   ├── courses/[courseId]/         # course + lessons
-    │   └── lessons/[lessonId]/         # upload + chat (lesson_id scoped)
+    ├── app/                   # routes + `globals.css`, `layout.tsx` (wraps `AppShell`)
+    ├── components/            # e.g. `AppShell.tsx` (nav / chrome)
+    ├── lib/api.ts             # `apiUrl()` — base from `NEXT_PUBLIC_API_BASE` or `http://127.0.0.1:8000`
     └── package.json
 ```
 
@@ -113,7 +114,13 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. Pages call **`http://127.0.0.1:8000`** (see `frontend/app/page.tsx` and lesson page). Run the API on **port 8000** or update `API_BASE` in the lesson page.
+Open <http://localhost:3000>. Fetches use **`frontend/lib/api.ts`**: default base **`http://127.0.0.1:8000`**, or set in `frontend/.env.local`:
+
+```bash
+NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
+```
+
+Run the API on the same host/port you configure (typically **8000**).
 
 ## Environment variables
 
@@ -123,6 +130,12 @@ Open <http://localhost:3000>. Pages call **`http://127.0.0.1:8000`** (see `front
 | `OPENROUTER_SITE_URL` | No | Optional attribution |
 | `OPENROUTER_APP_NAME` | No | Optional app title |
 
+### Frontend (optional)
+
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_API_BASE` | API origin without trailing slash (e.g. `http://127.0.0.1:8000`). Used by `frontend/lib/api.ts`. |
+
 ## API reference (v1)
 
 | Method | Path | Purpose |
@@ -131,21 +144,22 @@ Open <http://localhost:3000>. Pages call **`http://127.0.0.1:8000`** (see `front
 | `GET` | `/api/v1/chat` | Chat ping |
 | `POST` | `/api/v1/chat` | Agent: `{"session_id": "...", "lesson_id": 1, "question": "..."}` |
 | `POST` | `/api/v1/upload/{lesson_id}` | Multipart file → index under that lesson |
-| `POST` | `/api/v1/courses` | Create course (body: `Course`) |
+| `POST` | `/api/v1/courses` | Create course (body: `CourseCreate`; optional `id`, else auto) |
 | `GET` | `/api/v1/courses` | List courses |
 | `GET` | `/api/v1/courses/{course_id}` | Get one course |
-| `POST` | `/api/v1/courses/{course_id}/lessons` | Add lesson to course |
+| `POST` | `/api/v1/courses/{course_id}/lessons` | Add lesson (`LessonCreate`; optional `id`, else auto) |
 | `GET` | `/api/v1/courses/{course_id}/lessons` | List lessons |
+| `POST` | `/api/v1/lessons/{lesson_id}/generate-topic` | Topic studio: body `{"prompt":"..."}` → `TopicResponse` |
 | `GET` | `/api/v1/quiz/{lesson_id}` | MCQ JSON from lesson vectors (requires prior upload) |
 
-Create sample data via Swagger or `curl`, then open a lesson URL in the UI that matches a **lesson `id`** you created.
+Create data from the **home page** (new course) and **course page** (new lesson), or use Swagger / `curl`. Open `/lessons/{lessonId}` where `{lessonId}` matches the lesson’s numeric **`id`**.
 
 ## Quick test
 
 1. Start backend (and optional MCP).
-2. `POST /api/v1/courses` with a course that includes at least one lesson (`id`, `title`, `content`).
-3. Open the app home → course → lesson, or go directly to `/lessons/{lessonId}`.
-4. Upload a `.txt` lesson material file, then chat; optional: `GET /api/v1/quiz/{lesson_id}` in Swagger.
+2. On `/`, create a course; open it and add a lesson (or use the API with `CourseCreate` / `LessonCreate`).
+3. Open the lesson (`/lessons/{lessonId}`): optional **Topic studio** prompt + generate; upload a `.txt` for RAG; chat with the agent.
+4. Optional: `GET /api/v1/quiz/{lesson_id}` in Swagger after upload.
 
 ## Tech stack
 

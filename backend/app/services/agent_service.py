@@ -67,6 +67,10 @@ def run_agent(session_id: str, lesson_id: int, user_input: str):
         if "final answer" in result_text.lower():
             break
 
+        # Tutor UX: one retrieval + one answer — avoid summarize/quiz chaining on the same question.
+        if tool_name == "rag_search":
+            break
+
         # CONTINUE THINKING
         current_input = f"""
         Previous result:

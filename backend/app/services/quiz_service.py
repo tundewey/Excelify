@@ -7,6 +7,7 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
 )
 
+
 def generate_quiz(context: str):
 
     prompt = f"""
@@ -30,13 +31,14 @@ def generate_quiz(context: str):
     """
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="openai/gpt-4o",
         messages=[
             {
                 "role": "user",
                 "content": prompt
             }
-        ]
+        ],
+        max_tokens=1200,
     )
 
     content = response.choices[0].message.content
