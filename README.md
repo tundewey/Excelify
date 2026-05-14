@@ -28,7 +28,7 @@ Repository: [github.com/tundewey/Excelify](https://github.com/tundewey/Excelify)
 6. **Topics:** `topic_service.generate_topic` resolves the lesson across courses, builds context (course + lesson + optional RAG excerpts), calls OpenRouter, parses JSON (strips optional fenced code blocks if the model returns them).
 7. **MCP:** HTTP client to `http://127.0.0.1:9000` for non-RAG tools.
 
-The backend enables **CORS** for `http://localhost:3000` and `http://127.0.0.1:3000`.
+The backend enables **CORS** for local Next.js (`http://localhost:3000`, `http://127.0.0.1:3000`) and for the deployed UI at **`https://excelify-gamma.vercel.app`** (see `allow_origins` in `backend/app/main.py`). Add any extra production origins there when you ship.
 
 **Persistence:** `courses`, `lesson_vector_stores`, and `memory_store` are all **in memory**. Restarting the backend clears them.
 
@@ -121,6 +121,10 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
 ```
 
 Run the API on the same host/port you configure (typically **8000**).
+
+### Vercel (or other hosted frontend)
+
+Point the browser at your public API by setting **`NEXT_PUBLIC_API_BASE`** in the Vercel project (or `.env.production`) to that API origin, **without** a trailing slash (for example `https://your-api.example.com`). The backend must list your frontend origin in **`CORSMiddleware`** (`backend/app/main.py`).
 
 ## Environment variables
 
